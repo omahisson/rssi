@@ -1,32 +1,32 @@
 #include "esp_wifi.h"
 #include <WiFi.h>
 
-int channel = 1;
+int canalAtual = 1;
 
-void sniffer(void* buf, wifi_promiscuous_pkt_type_t type) {
+void capturarPacotesWifi(void* bufferRecebido, wifi_promiscuous_pkt_type_t tipoPacote) {
 
-  if (type != WIFI_PKT_MGMT) return;
+  if (tipoPacote != WIFI_PKT_MGMT) return;
 
-  wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t*)buf;
-  uint8_t *payload = pkt->payload;
+  wifi_promiscuous_pkt_t *pacoteCapturado = (wifi_promiscuous_pkt_t*)bufferRecebido;
+  uint8_t *dadosPacotePayload = pacoteCapturado->payload;
 
-  int rssi = pkt->rx_ctrl.rssi;
+  int intensidadeSinalRSSI = pacoteCapturado->rx_ctrl.rssi;
 
-  uint8_t mac[6];
-  memcpy(mac, payload + 10, 6);
+  uint8_t enderecoMac[6];
+  memcpy(enderecoMac, dadosPacotePayload + 10, 6);
 
   Serial.print("MAC: ");
-  for(int i=0;i<6;i++){
-    if(mac[i]<16) Serial.print("0");
-    Serial.print(mac[i],HEX);
-    if(i<5) Serial.print(":");
+  for (int indice = 0; indice < 6; indice++) {
+    if (enderecoMac[indice] < 16) Serial.print("0");
+    Serial.print(enderecoMac[indice], HEX);
+    if (indice < 5) Serial.print(":");
   }
 
   Serial.print("  RSSI: ");
-  Serial.print(rssi);
+  Serial.print(intensidadeSinalRSSI);
 
   Serial.print("  CH: ");
-  Serial.println(channel);
+  Serial.println(canalAtual);
 }
 
 void setup() {
@@ -37,15 +37,15 @@ void setup() {
   WiFi.disconnect();
 
   esp_wifi_set_promiscuous(true);
-  esp_wifi_set_promiscuous_rx_cb(&sniffer);
+  esp_wifi_set_promiscuous_rx_cb(&capturarPacotesWifi);
 }
 
 void loop() {
 
-  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_channel(canalAtual, WIFI_SECOND_CHAN_NONE);
 
-  channel++;
-  if(channel>13) channel=1;
+  canalAtual++;
+  if (canalAtual > 13) canalAtual = 1;
 
   delay(400);
 }
