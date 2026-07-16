@@ -13,7 +13,7 @@ const char* NOME_WIFI = "NOME_DA_SUA_REDE";
 const char* SENHA_WIFI = "SENHA_DA_SUA_REDE";
 
 //alterar
-IPAddress IP_SERVIDOR(192, 168, 10, 234);
+IPAddress IP_SERVIDOR(172, 20, 10, 2);
 
 constexpr uint16_t PORTA_SERVIDOR = 5005;
 constexpr uint16_t PORTA_LOCAL_UDP = 5006;
