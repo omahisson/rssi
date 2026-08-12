@@ -7,7 +7,8 @@ const ENDERECO_SERVIDOR = "0.0.0.0";
 
 const IDENTIFICADOR_ANCORA_PRINCIPAL = "ANCORA_01";
 const MAXIMO_MACS_INTERESSE = 10;
-const INTERVALO_REENVIO_CONFIGURACAO_MS = 3000;
+const INTERVALO_LOOP_MS = 1000;
+const INTERVALO_REENVIO_CONFIGURACAO_MS = INTERVALO_LOOP_MS;
 const TEMPO_INATIVIDADE_GATEWAY_MS = 30000;
 
 const servidorUDP = dgram.createSocket("udp4");
@@ -438,6 +439,6 @@ setInterval(() => {
       enviarConfiguracaoParaGateway(identificadorAncora);
     }
   }
-}, 1000);
+}, INTERVALO_LOOP_MS);
 
 servidorUDP.bind(PORTA_SERVIDOR, ENDERECO_SERVIDOR);

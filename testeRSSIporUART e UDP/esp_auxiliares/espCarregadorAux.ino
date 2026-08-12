@@ -3,9 +3,6 @@
 #include <esp_wifi.h>
 #include <esp_timer.h>
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-
 HardwareSerial uartComunicacao(2);
 
 constexpr int PINO_RX = 4;
@@ -13,7 +10,7 @@ constexpr int PINO_TX = 2;
 constexpr uint32_t BAUD_UART = 115200;
 
 constexpr size_t MAXIMO_MACS_INTERESSE = 10;
-constexpr size_t TAMANHO_FILA_FRAMES = 128;
+const unsigned long INTERVALO_LOOP_MS = 1000;
 constexpr size_t TAMANHO_BUFFER_UART = 512;
 
 struct RegistroFrame {
@@ -25,7 +22,6 @@ struct RegistroFrame {
   uint8_t retransmissao;
 };
 
-QueueHandle_t filaFrames;
 
 uint8_t macsInteresse[MAXIMO_MACS_INTERESSE][6];
 size_t quantidadeMacsInteresse = 0;
@@ -34,7 +30,6 @@ uint32_t versaoConfiguracaoAtual = 0;
 
 portMUX_TYPE mutexConfiguracao = portMUX_INITIALIZER_UNLOCKED;
 
-volatile uint32_t framesDescartados = 0;
 
 char bufferLinhaUART[TAMANHO_BUFFER_UART];
 size_t tamanhoLinhaUART = 0;
@@ -128,6 +123,8 @@ bool macEstaNaLista(const uint8_t* mac) {
   return encontrado;
 }
 
+void enviarFramePelaUART(const RegistroFrame& registro);
+
 void aoReceberFrame(
   void* buffer,
   wifi_promiscuous_pkt_type_t tipoPacote
@@ -184,9 +181,8 @@ void aoReceberFrame(
   registro.retransmissao =
     (controleFrame & 0x0800) != 0 ? 1 : 0;
 
-  if (xQueueSend(filaFrames, &registro, 0) != pdTRUE) {
-    framesDescartados++;
-  }
+  // Fila removida: envia imediatamente para o gateway pela UART.
+  enviarFramePelaUART(registro);
 }
 
 void enviarFramePelaUART(const RegistroFrame& registro) {
@@ -415,7 +411,7 @@ void receberDadosUART() {
 }
 
 void relatarEstado() {
-  if (millis() - ultimoRelatorio < 5000) {
+  if (millis() - ultimoRelatorio < INTERVALO_LOOP_MS) {
     return;
   }
 
@@ -437,15 +433,6 @@ void relatarEstado() {
     canal,
     static_cast<unsigned int>(quantidade)
   );
-
-  if (framesDescartados > 0) {
-    Serial.printf(
-      "[STATUS] Frames descartados por fila cheia: %lu\n",
-      static_cast<unsigned long>(framesDescartados)
-    );
-
-    framesDescartados = 0;
-  }
 }
 
 void setup() {
@@ -464,19 +451,6 @@ void setup() {
     PINO_TX
   );
 
-  filaFrames = xQueueCreate(
-    TAMANHO_FILA_FRAMES,
-    sizeof(RegistroFrame)
-  );
-
-  if (filaFrames == nullptr) {
-    Serial.println("[ERRO] Não foi possível criar a fila");
-
-    while (true) {
-      delay(1000);
-    }
-  }
-
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
@@ -490,13 +464,6 @@ void setup() {
 
 void loop() {
   receberDadosUART();
-
-  RegistroFrame registro;
-
-  while (xQueueReceive(filaFrames, &registro, 0) == pdTRUE) {
-    enviarFramePelaUART(registro);
-  }
-
   relatarEstado();
   delay(1);
 }

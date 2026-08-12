@@ -3,9 +3,6 @@
 #include <esp_wifi.h>
 #include <esp_timer.h>
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-
 HardwareSerial uartComunicacao(2);
 
 constexpr int PINO_RX = 4;
@@ -15,7 +12,9 @@ constexpr uint32_t BAUD_UART = 115200;
 const char* NOME_REDE = "ESP_ABERTO";
 
 constexpr size_t MAXIMO_DISPOSITIVOS = 10;
-constexpr size_t TAMANHO_FILA = 64;
+
+// Constante global
+const unsigned long INTERVALO_LOOP_MS = 1000;
 
 struct RegistroFrame {
   uint32_t tempoMs;
@@ -26,17 +25,12 @@ struct RegistroFrame {
   uint8_t retransmissao;
 };
 
-QueueHandle_t filaFrames;
-
 uint8_t dispositivosConectados[MAXIMO_DISPOSITIVOS][6];
 size_t quantidadeDispositivosConectados = 0;
 
 portMUX_TYPE mutexDispositivos = portMUX_INITIALIZER_UNLOCKED;
 
-volatile uint32_t framesDescartados = 0;
-
 unsigned long ultimaAtualizacaoDispositivos = 0;
-unsigned long ultimoRelatorio = 0;
 
 void atualizarDispositivosConectados() {
   wifi_sta_list_t listaEstacoes;
@@ -83,6 +77,28 @@ bool dispositivoEstaConectado(const uint8_t* mac) {
   return encontrado;
 }
 
+void enviarFramePelaUART(const RegistroFrame& registro) {
+  uartComunicacao.printf(
+    "FRAME|%lu|"
+    "%02X:%02X:%02X:%02X:%02X:%02X|"
+    "%d|%u|%u|%u\n",
+
+    static_cast<unsigned long>(registro.tempoMs),
+
+    registro.mac[0],
+    registro.mac[1],
+    registro.mac[2],
+    registro.mac[3],
+    registro.mac[4],
+    registro.mac[5],
+
+    registro.rssi,
+    registro.canal,
+    registro.sequencia,
+    registro.retransmissao
+  );
+}
+
 void aoReceberFrame(
   void* buffer,
   wifi_promiscuous_pkt_type_t tipoPacote
@@ -104,11 +120,11 @@ void aoReceberFrame(
     return;
   }
 
-  uint16_t controleFrame =
+  const uint16_t controleFrame =
     static_cast<uint16_t>(quadro[0]) |
     (static_cast<uint16_t>(quadro[1]) << 8);
 
-  uint8_t tipoFrame = (controleFrame >> 2) & 0x03;
+  const uint8_t tipoFrame = (controleFrame >> 2) & 0x03;
 
   if (tipoFrame == 1) {
     return;
@@ -120,14 +136,12 @@ void aoReceberFrame(
     return;
   }
 
-  uint8_t retransmissao =
+  const uint8_t retransmissao =
     (controleFrame & 0x0800) != 0 ? 1 : 0;
 
-  uint16_t controleSequencia =
+  const uint16_t controleSequencia =
     static_cast<uint16_t>(quadro[22]) |
     (static_cast<uint16_t>(quadro[23]) << 8);
-
-  uint16_t sequencia = controleSequencia >> 4;
 
   RegistroFrame registro;
 
@@ -139,34 +153,11 @@ void aoReceberFrame(
 
   registro.rssi = pacote->rx_ctrl.rssi;
   registro.canal = pacote->rx_ctrl.channel;
-  registro.sequencia = sequencia;
+  registro.sequencia = controleSequencia >> 4;
   registro.retransmissao = retransmissao;
 
-  if (xQueueSend(filaFrames, &registro, 0) != pdTRUE) {
-    framesDescartados++;
-  }
-}
-
-void enviarFramePelaUART(const RegistroFrame& registro) {
-  uartComunicacao.printf(
-    "FRAME|%lu|"
-    "%02X:%02X:%02X:%02X:%02X:%02X|"
-    "%d|%u|%u|%u\n",
-
-    static_cast<unsigned long>(registro.tempoMs),
-
-    registro.mac[0],
-    registro.mac[1],
-    registro.mac[2],
-    registro.mac[3],
-    registro.mac[4],
-    registro.mac[5],
-
-    registro.rssi,
-    registro.canal,
-    registro.sequencia,
-    registro.retransmissao
-  );
+  // Fila removida agora envia imediatamente
+  enviarFramePelaUART(registro);
 }
 
 void configurarCapturaWiFi() {
@@ -191,22 +182,9 @@ void setup() {
     PINO_TX
   );
 
-  filaFrames = xQueueCreate(
-    TAMANHO_FILA,
-    sizeof(RegistroFrame)
-  );
-
-  if (filaFrames == nullptr) {
-    uartComunicacao.println("ERRO|FILA_NAO_CRIADA");
-
-    while (true) {
-      delay(1000);
-    }
-  }
-
   WiFi.mode(WIFI_AP);
 
-  bool accessPointCriado = WiFi.softAP(NOME_REDE);
+  const bool accessPointCriado = WiFi.softAP(NOME_REDE);
 
   if (!accessPointCriado) {
     uartComunicacao.println("ERRO|ACCESS_POINT");
@@ -229,28 +207,15 @@ void setup() {
 }
 
 void loop() {
-  RegistroFrame registro;
+  const unsigned long agora = millis();
 
-  while (xQueueReceive(filaFrames, &registro, 0) == pdTRUE) {
-    enviarFramePelaUART(registro);
-  }
-
-  if (millis() - ultimaAtualizacaoDispositivos >= 1000) {
-    ultimaAtualizacaoDispositivos = millis();
-
+  if (
+    agora - ultimaAtualizacaoDispositivos >=
+    INTERVALO_LOOP_MS
+  ) {
+    ultimaAtualizacaoDispositivos = agora;
     atualizarDispositivosConectados();
   }
 
-  if (millis() - ultimoRelatorio >= 5000) {
-    ultimoRelatorio = millis();
-
-    if (framesDescartados > 0) {
-      uartComunicacao.printf(
-        "AVISO|FRAMES_DESCARTADOS|%lu\n",
-        static_cast<unsigned long>(framesDescartados)
-      );
-
-      framesDescartados = 0;
-    }
-  }
+  delay(1);
 }
