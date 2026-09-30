@@ -432,9 +432,9 @@ export function adicionarLeituraRSSI(frame) {
   ancora.ultimaLeituraMs = Date.now();
   ancora.ultimaLeituraIso = frame.recebidoEm ?? agoraIso();
 
-  if (gravacaoAtual) {
+  if (gravacaoAtual && !gravacaoAtual.pausada) {
     gravacaoAtual.frames.push({
-      decorridoMs: Date.now() - gravacaoAtual.iniciadoEmMs,
+      decorridoMs: calcularDecorridoGravacao(),
       frame: {
         identificadorAncora: frame.identificadorAncora,
         tempoMs: frame.tempoMs,
@@ -614,13 +614,30 @@ function criarIdentificadorGravacao() {
     .replace(/[:.]/g, "-");
 }
 
-function registrarAmostraGravacao() {
+function calcularDecorridoGravacao(agora = Date.now()) {
   if (!gravacaoAtual) {
+    return 0;
+  }
+
+  const pausaAtualMs = gravacaoAtual.pausada
+    ? agora - gravacaoAtual.pausadaEmMs
+    : 0;
+  const tempoExecutandoMs =
+    agora -
+    gravacaoAtual.iniciadoEmMs -
+    gravacaoAtual.tempoPausadoMs -
+    pausaAtualMs;
+
+  return Math.max(0, tempoExecutandoMs);
+}
+
+function registrarAmostraGravacao() {
+  if (!gravacaoAtual || gravacaoAtual.pausada) {
     return;
   }
 
   gravacaoAtual.amostras.push({
-    decorridoMs: Date.now() - gravacaoAtual.iniciadoEmMs,
+    decorridoMs: calcularDecorridoGravacao(),
     estado: montarEstadoAtual(),
   });
 }
@@ -638,6 +655,9 @@ function iniciarGravacao() {
     nome: `Gravação ${new Date(iniciadoEmMs).toLocaleString("pt-BR")}`,
     iniciadoEm: new Date(iniciadoEmMs).toISOString(),
     iniciadoEmMs,
+    pausada: false,
+    pausadaEmMs: null,
+    tempoPausadoMs: 0,
     configuracao: {
       distanciasAncoras: { ...configuracaoDistancias },
       potenciaReferencia: A,
@@ -655,6 +675,43 @@ function iniciarGravacao() {
     id: gravacaoAtual.id,
     nome: gravacaoAtual.nome,
     iniciadoEm: gravacaoAtual.iniciadoEm,
+    pausada: gravacaoAtual.pausada,
+  };
+}
+
+function pausarGravacao() {
+  if (!gravacaoAtual) {
+    throw new Error("Não existe gravação em andamento.");
+  }
+
+  if (!gravacaoAtual.pausada) {
+    registrarAmostraGravacao();
+    gravacaoAtual.pausada = true;
+    gravacaoAtual.pausadaEmMs = Date.now();
+  }
+
+  return {
+    id: gravacaoAtual.id,
+    pausada: gravacaoAtual.pausada,
+  };
+}
+
+function retomarGravacao() {
+  if (!gravacaoAtual) {
+    throw new Error("Não existe gravação em andamento.");
+  }
+
+  if (gravacaoAtual.pausada) {
+    gravacaoAtual.tempoPausadoMs +=
+      Date.now() - gravacaoAtual.pausadaEmMs;
+    gravacaoAtual.pausada = false;
+    gravacaoAtual.pausadaEmMs = null;
+    registrarAmostraGravacao();
+  }
+
+  return {
+    id: gravacaoAtual.id,
+    pausada: gravacaoAtual.pausada,
   };
 }
 
@@ -671,10 +728,13 @@ async function pararGravacao() {
   const gravacaoFinalizada = {
     ...gravacaoAtual,
     finalizadoEm: new Date(finalizadoEmMs).toISOString(),
-    duracaoMs: finalizadoEmMs - gravacaoAtual.iniciadoEmMs,
+    duracaoMs: calcularDecorridoGravacao(finalizadoEmMs),
   };
 
   delete gravacaoFinalizada.iniciadoEmMs;
+  delete gravacaoFinalizada.pausada;
+  delete gravacaoFinalizada.pausadaEmMs;
+  delete gravacaoFinalizada.tempoPausadoMs;
 
   const caminho = path.join(
     diretorioGravacoes,
@@ -810,6 +870,7 @@ const servidorHTTP = http.createServer(async (req, res) => {
               id: gravacaoAtual.id,
               nome: gravacaoAtual.nome,
               iniciadoEm: gravacaoAtual.iniciadoEm,
+              pausada: gravacaoAtual.pausada,
             }
           : null,
         gravacoes: await listarGravacoes(),
@@ -824,6 +885,16 @@ const servidorHTTP = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/gravacoes/parar") {
       responderJson(res, 200, await pararGravacao());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/gravacoes/pausar") {
+      responderJson(res, 200, pausarGravacao());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/gravacoes/retomar") {
+      responderJson(res, 200, retomarGravacao());
       return;
     }
 
