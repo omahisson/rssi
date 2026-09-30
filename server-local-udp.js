@@ -1,6 +1,10 @@
 "use strict";
 
-const dgram = require("node:dgram");
+import dgram from "node:dgram";
+import {
+  adicionarLeituraRSSI,
+  iniciarServicoLocalizacao,
+} from "./servico-localizacao.js";
 
 const PORTA_SERVIDOR = 5005;
 const ENDERECO_SERVIDOR = "0.0.0.0";
@@ -364,6 +368,8 @@ function processarFrame(partes, mensagemBruta, origemRemota) {
     aprenderConfiguracaoPeloFramePrincipal(frame);
   }
 
+  adicionarLeituraRSSI(frame);
+
   console.log({
     origem: `${origemRemota.address}:${origemRemota.port}`,
     ...frame,
@@ -398,7 +404,7 @@ function processarMensagem(mensagemBruta, origemRemota) {
   }
 }
 
-servidorUDP.on("listening", () => {
+servidorUDP.on("listening", async () => {
   const enderecoAtual = servidorUDP.address();
 
   console.log(
@@ -406,6 +412,13 @@ servidorUDP.on("listening", () => {
   );
   console.log(`Âncora principal: ${IDENTIFICADOR_ANCORA_PRINCIPAL}`);
   console.log("Aguardando gateways e frames...\n");
+
+  try {
+    await iniciarServicoLocalizacao();
+  } catch (erro) {
+    console.error("Erro ao iniciar o serviço de localização:", erro);
+    servidorUDP.close();
+  }
 });
 
 servidorUDP.on("message", (mensagemRecebida, origemRemota) => {
@@ -417,10 +430,11 @@ servidorUDP.on("message", (mensagemRecebida, origemRemota) => {
 
 servidorUDP.on("error", (erro) => {
   console.error("Erro no servidor UDP:", erro);
+  clearInterval(temporizadorReenvio);
   servidorUDP.close();
 });
 
-setInterval(() => {
+const temporizadorReenvio = setInterval(() => {
   const agora = Date.now();
 
   for (const [identificadorAncora, gateway] of gatewaysAuxiliares) {
